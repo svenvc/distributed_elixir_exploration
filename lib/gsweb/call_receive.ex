@@ -32,8 +32,13 @@ defmodule Gsweb.CallReceive do
         :ok
 
       message ->
-        frame = "data: #{JSON.encode!(message)}\n\n"
+        json_message = JSON.encode!(message)
+        frame = "data: #{json_message}\n\n"
+
+        IO.puts(json_message)
+
         :ok = :cowboy_req.stream_body(frame, :nofin, req)
+
         loop(req)
     end
   end
