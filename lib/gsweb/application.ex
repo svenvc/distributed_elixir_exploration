@@ -10,6 +10,7 @@ defmodule Gsweb.Application do
     children = [
       # Starts a worker by calling: Gsweb.Worker.start_link(arg)
       # {Gsweb.Worker, arg}
+      Gsweb.HTTPServer
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html
