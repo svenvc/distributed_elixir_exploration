@@ -8,7 +8,8 @@ defmodule Gsweb.HTTPServer do
       :cowboy_router.compile([
         {:_,
          [
-           {"/up", Gsweb.Up, []}
+           {"/up", Gsweb.Up, []},
+           {"/process/:process_name/call", Gsweb.Call, []}
          ]}
       ])
 
@@ -18,6 +19,8 @@ defmodule Gsweb.HTTPServer do
         [port: 4000],
         %{env: %{dispatch: dispatch}}
       )
+
+    IO.puts("Cowboy ready at http://localhost:4000")
 
     {:ok, %{}}
   end
