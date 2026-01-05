@@ -1,14 +1,16 @@
 defmodule Gsweb.CallReceive do
   @behaviour :cowboy_handler
+  import Gsweb.Utils
+  require Logger
 
   def init(req, state) do
     process_name = :cowboy_req.binding(:process_name, req)
     {:ok, body, req} = :cowboy_req.read_body(req)
     message = JSON.decode!(body)
 
-    IO.puts("/process/#{process_name}/call-receive #{inspect(message)}")
+    Logger.debug("/process/#{process_name}/call-receive #{inspect(message)}")
 
-    _result = GenServer.call({:global, process_name}, message)
+    _result = GenServer.call(resolve(process_name), message)
 
     req =
       :cowboy_req.stream_reply(
@@ -21,25 +23,19 @@ defmodule Gsweb.CallReceive do
         req
       )
 
-    loop(req)
-
-    {:ok, req, state}
-  end
-
-  defp loop(req) do
-    receive do
-      {:cowboy_req, :terminate} ->
-        :ok
-
-      message ->
+    loop(
+      req,
+      fn message ->
         json_message = JSON.encode!(message)
+
+        Logger.debug(json_message)
+
         frame = "data: #{json_message}\n\n"
 
-        IO.puts(json_message)
-
         :ok = :cowboy_req.stream_body(frame, :nofin, req)
+      end
+    )
 
-        loop(req)
-    end
+    {:ok, req, state}
   end
 end

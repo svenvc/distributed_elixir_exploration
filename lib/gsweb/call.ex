@@ -1,14 +1,16 @@
 defmodule Gsweb.Call do
   @behaviour :cowboy_handler
+  import Gsweb.Utils
+  require Logger
 
   def init(req, state) do
     process_name = :cowboy_req.binding(:process_name, req)
     {:ok, body, req} = :cowboy_req.read_body(req)
     message = JSON.decode!(body)
 
-    IO.puts("/process/#{process_name}/call #{inspect(message)}")
+    Logger.debug("/process/#{process_name}/call #{inspect(message)}")
 
-    result = GenServer.call({:global, process_name}, message)
+    result = GenServer.call(resolve(process_name), message)
 
     req =
       :cowboy_req.reply(

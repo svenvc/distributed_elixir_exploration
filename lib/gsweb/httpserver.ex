@@ -1,5 +1,8 @@
 defmodule Gsweb.HTTPServer do
   use GenServer
+  require Logger
+
+  @one_day_ms 24 * 60 * 60 * 1_000
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
 
@@ -18,10 +21,13 @@ defmodule Gsweb.HTTPServer do
       :cowboy.start_clear(
         :http,
         [port: 4000],
-        %{env: %{dispatch: dispatch}}
+        %{
+          idle_timeout: @one_day_ms,
+          env: %{dispatch: dispatch}
+        }
       )
 
-    IO.puts("Cowboy ready at http://localhost:4000")
+    Logger.notice("Cowboy ready at http://localhost:4000")
 
     {:ok, %{}}
   end
