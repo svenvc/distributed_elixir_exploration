@@ -1,21 +1,50 @@
-# Gsweb
+# Exploring Distributed Elixir
 
-**TODO: Add description**
+Setting up a cluster
 
-## Installation
+```
+iex --sname foo -S mix
 
-If [available in Hex](https://hex.pm/docs/publish), the package can be installed
-by adding `gsweb` to your list of dependencies in `mix.exs`:
+iex --sname bar -S mix
 
-```elixir
-def deps do
-  [
-    {:gsweb, "~> 0.1.0"}
-  ]
-end
+Node.connect :bar@hostname
+
+Node.list
+
+:global.registered_names
 ```
 
-Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
-and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
-be found at <https://hexdocs.pm/gsweb>.
+Starting the demo GenServers.
 
+```
+GenServer.start(KV, nil, name: {:global, :kv1})
+
+GenServer.start(PS, nil, name: {:global, :ps1})
+```
+
+Using the key-value server
+
+```
+GenServer.call({:global :kv1}, {:set, :foo, 42})
+GenServer.call({:global, kv1}, {:get, :foo})
+```
+
+Using the publish-subscribe server
+
+```
+GenServer.call({:global, ps1}, {:subscribe, "topic1"})
+
+GenServer.call({:global, ps1}, {:broadcast, "topic1", [:msg, "hi"]})
+```
+
+REST interface
+
+```
+$ curl http://localhost:4000/process/kv1/call -d '["get", "foo"]'    
+
+$ curl http://localhost:4000/process/kv1/call -d '["set", "foo", 42]'
+
+$ curl -N http://localhost:4000/process/ps1/call-receive -d '["subscribe", "topic1"]'
+
+$ curl http://localhost:4000/process/ps1/call -d '["broadcast", "topic1", ["msg", "hi"]]'
+```
