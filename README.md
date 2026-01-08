@@ -3,12 +3,16 @@
 Setting up a cluster
 
 ```
-iex --sname foo -S mix
+$ iex --sname zed -S mix
 
-iex --sname bar -S mix
+$ iex --sname core -S mix run --no-start
 
-Node.connect :bar@hostname
+iex(zed@pathfinder)> Node.connect :core@pathfinder
+```
 
+Inspecting the cluster
+
+```
 Node.list
 
 :global.registered_names
