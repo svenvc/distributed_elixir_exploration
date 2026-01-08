@@ -1,5 +1,10 @@
 # Exploring Distributed Elixir
 
+See the following blog:
+
+- https://blog.stfx.eu/2025-12-29-exploring-distributed-elixer.html
+
+
 Setting up a cluster
 
 ```
@@ -30,6 +35,7 @@ Using the key-value server
 
 ```
 GenServer.call({:global :kv1}, {:set, :foo, 42})
+
 GenServer.call({:global, kv1}, {:get, :foo})
 ```
 
