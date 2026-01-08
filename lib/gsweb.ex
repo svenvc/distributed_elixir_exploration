@@ -1,3 +1,0 @@
-defmodule Gsweb do
-
-end

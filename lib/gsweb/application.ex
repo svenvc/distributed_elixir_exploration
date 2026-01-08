@@ -1,20 +1,16 @@
 defmodule Gsweb.Application do
-  # See https://hexdocs.pm/elixir/Application.html
-  # for more information on OTP Applications
-  @moduledoc false
+  @moduledoc """
+  Start the GenServer web/http REST server
+  """
 
   use Application
 
   @impl true
   def start(_type, _args) do
     children = [
-      # Starts a worker by calling: Gsweb.Worker.start_link(arg)
-      # {Gsweb.Worker, arg}
       Gsweb.HTTPServer
     ]
 
-    # See https://hexdocs.pm/elixir/Supervisor.html
-    # for other strategies and supported options
     opts = [strategy: :one_for_one, name: Gsweb.Supervisor]
     Supervisor.start_link(children, opts)
   end

@@ -2,6 +2,12 @@ defmodule Gsweb.HTTPServer do
   use GenServer
   require Logger
 
+  @moduledoc """
+  A REST interface to GenServer call and cast
+  with variants to receive incoming messages
+  and broadcast them as server-sent events
+  """
+
   @one_day_ms 24 * 60 * 60 * 1_000
 
   def start_link(opts), do: GenServer.start_link(__MODULE__, opts, name: __MODULE__)
