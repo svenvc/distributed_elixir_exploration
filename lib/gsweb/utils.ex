@@ -2,7 +2,13 @@ defmodule Gsweb.Utils do
   require Logger
 
   def resolve(process_name) do
-    :global.whereis_name(process_name) || :global.whereis_name(String.to_atom(process_name))
+    result = :global.whereis_name(process_name)
+
+    if result != :undefined do
+      result
+    else
+      :global.whereis_name(String.to_atom(process_name))
+    end
   end
 
   @heartbeat_ms 60_000

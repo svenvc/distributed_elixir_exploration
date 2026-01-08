@@ -13,7 +13,9 @@ defmodule Gsweb.HTTPServer do
          [
            {"/up", Gsweb.Up, []},
            {"/process/:process_name/call", Gsweb.Call, []},
-           {"/process/:process_name/call-receive", Gsweb.CallReceive, []}
+           {"/process/:process_name/call-receive", Gsweb.CallReceive, []},
+           {"/process/:process_name/cast", Gsweb.Call, []},
+           {"/process/:process_name/cast-receive", Gsweb.CallReceive, []}
          ]}
       ])
 
