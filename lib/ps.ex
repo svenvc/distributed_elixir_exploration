@@ -10,6 +10,10 @@ defmodule PS do
     {:ok, %{}}
   end
 
+  def start_link(opts) do
+    GenServer.start_link(__MODULE__, nil, opts)
+  end
+
   @impl true
   def handle_call({:subscribe, topic}, {sender, _call}, state) do
     new_state =

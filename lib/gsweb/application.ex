@@ -8,7 +8,9 @@ defmodule Gsweb.Application do
   @impl true
   def start(_type, _args) do
     children = [
-      Gsweb.HTTPServer
+      Gsweb.HTTPServer,
+      {KV, name: {:global, :kv1}},
+      {PS, name: {:global, :ps1}}
     ]
 
     opts = [strategy: :one_for_one, name: Gsweb.Supervisor]

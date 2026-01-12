@@ -10,6 +10,10 @@ defmodule KV do
     {:ok, %{}}
   end
 
+  def start_link(opts) do
+    GenServer.start_link(__MODULE__, nil, opts)
+  end
+
   @impl true
   def handle_call({:get, key}, _, state) do
     {:reply, Map.get(state, key), state}
