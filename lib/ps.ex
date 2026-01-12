@@ -1,5 +1,6 @@
 defmodule PS do
   use GenServer
+  require Logger
 
   @moduledoc """
   A simple publish-subscribe server
@@ -86,7 +87,7 @@ defmodule PS do
 
   @impl true
   def handle_info({:DOWN, _ref, :process, process, reason}, state) do
-    IO.puts("DOWN #{inspect(process)} for reason #{inspect(reason)}")
+    Logger.debug("DOWN #{inspect(process)} for reason #{inspect(reason)}, unsubscribing")
 
     new_state =
       Map.new(state, fn {topic, subscribers} ->
