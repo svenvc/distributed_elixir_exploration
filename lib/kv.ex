@@ -39,4 +39,9 @@ defmodule KV do
   def handle_call("keys", from, state) do
     handle_call(:keys, from, state)
   end
+
+  @impl true
+  def handle_call(_, _, state) do
+    {:reply, :not_implemented, state}
+  end
 end

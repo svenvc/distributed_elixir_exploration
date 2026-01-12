@@ -76,6 +76,11 @@ defmodule PS do
   end
 
   @impl true
+  def handle_call(_, _, state) do
+    {:reply, :not_implemented, state}
+  end
+
+  @impl true
   def handle_info({:DOWN, _ref, :process, process, reason}, state) do
     IO.puts("DOWN #{inspect(process)} for reason #{inspect(reason)}")
 
