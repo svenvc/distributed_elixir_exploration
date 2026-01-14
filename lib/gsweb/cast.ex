@@ -10,7 +10,7 @@ defmodule Gsweb.Cast do
 
     Logger.debug("/process/#{process_name}/cast #{inspect(message)}")
 
-    :ok = GenServer.call(resolve(process_name), message)
+    :ok = GenServer.cast(resolve(process_name), message)
 
     req =
       :cowboy_req.reply(
