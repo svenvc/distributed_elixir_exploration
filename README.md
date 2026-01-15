@@ -1,8 +1,9 @@
 # Exploring Distributed Elixir
 
-See the following blog:
+See the following blog posts:
 
 - https://blog.stfx.eu/2025-12-29-exploring-distributed-elixer.html
+- https://blog.stfx.eu/2026-01-15-gsweb.html
 
 
 Setting up a cluster
@@ -30,6 +31,11 @@ GenServer.start(KV, nil, name: {:global, :kv1})
 
 GenServer.start(PS, nil, name: {:global, :ps1})
 ```
+
+Note: in mix project/application, 
+these are started automatically under a supervisor,
+together with the web service interface,
+unless you use the no-start option.
 
 Using the key-value server
 
