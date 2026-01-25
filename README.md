@@ -3,7 +3,7 @@
 See the following blog posts:
 
 - https://blog.stfx.eu/2025-12-29-exploring-distributed-elixer.html
-- https://blog.stfx.eu/2026-01-15-gsweb.html
+- [https://blog.stfx.eu/2026-01-15-gsweb.html](https://blog.stfx.eu/2026-01-15-gs-web.html)
 
 
 Setting up a cluster
