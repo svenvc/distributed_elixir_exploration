@@ -169,7 +169,8 @@ defmodule PQ do
 
   @impl true
   def handle_call(:head, {_sender, _call}, %__MODULE__{first_segment: first_segment} = state) do
-    {:reply, List.first(first_segment), state}
+    head = List.first(first_segment)
+    {:reply, head["msg"], state}
   end
 
   @impl true
