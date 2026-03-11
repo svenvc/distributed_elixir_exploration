@@ -49,6 +49,10 @@ defmodule PQ do
     GenServer.start(__MODULE__, opts, opts)
   end
 
+  def stop(pq) do
+    GenServer.stop(pq)
+  end
+
   # client API
 
   def enqueue(pq, msg) when is_map(msg) do
@@ -79,7 +83,7 @@ defmodule PQ do
 
   @impl true
   def handle_call({:enqueue, msg}, {_sender, _call}, state) do
-    record = %{id: state.enqueue_count, ts: to_string(DateTime.utc_now()), msg: msg}
+    record = %{"id" => state.enqueue_count, "ts" => to_string(DateTime.utc_now()), "msg" => msg}
     json = JSON.encode_to_iodata!(record)
     log_enqueue(state, json)
 
@@ -90,6 +94,7 @@ defmodule PQ do
             %{
               state
               | enqueue_count: state.enqueue_count + 1,
+                first_segment: state.first_segment ++ [record],
                 last_segment: [],
                 last_segment_id: state.last_segment_id + state.segment_size
             }
@@ -127,7 +132,7 @@ defmodule PQ do
       {:reply, nil, state}
     else
       [head | rest] = state.first_segment
-      record = %{id: head.id, ts: to_string(DateTime.utc_now()), ack: ack}
+      record = %{"id" => head["id"], "ts" => to_string(DateTime.utc_now()), "ack" => ack}
       json = JSON.encode_to_iodata!(record)
       log_dequeue(state, json)
 
@@ -158,7 +163,7 @@ defmodule PQ do
           %{state | first_segment: rest, dequeue_count: state.dequeue_count + 1}
         end
 
-      {:reply, head, new_state}
+      {:reply, head["msg"], new_state}
     end
   end
 
@@ -185,7 +190,7 @@ defmodule PQ do
     |> Enum.filter(fn file -> Path.extname(file) == ".ndjson" end)
     |> Enum.map(fn file -> File.rm!(Path.join(base_dir_path, file)) end)
 
-    {:reply,
+    {:reply, true,
      %{
        state
        | enqueue_count: 0,
@@ -194,7 +199,7 @@ defmodule PQ do
          last_segment: [],
          first_segment_id: 0,
          last_segment_id: 0
-     }, state}
+     }}
   end
 
   # internals
@@ -291,7 +296,7 @@ defmodule PQ do
       ) do
     segment_id = div(enqueue_count, segment_size)
     path = Path.join(queue_base_dir(state), "enqueue-#{segment_id}.ndjson")
-    File.write!(path, [json, "\n"], [:append])
+    append_ndjson(json, path)
   end
 
   def log_dequeue(
@@ -300,7 +305,7 @@ defmodule PQ do
       ) do
     segment_id = div(dequeue_count, segment_size)
     path = Path.join(queue_base_dir(state), "dequeue-#{segment_id}.ndjson")
-    File.write!(path, [json, "\n"], [:append])
+    append_ndjson(json, path)
   end
 
   def gc_unused_segments(state) do
@@ -332,6 +337,6 @@ defmodule PQ do
   end
 
   def append_ndjson(io_data, file) do
-    File.write(file, [io_data, "\n"], [:append])
+    File.write!(file, [io_data, "\n"], [:append])
   end
 end
