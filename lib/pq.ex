@@ -96,7 +96,7 @@ defmodule PQ do
               | enqueue_count: state.enqueue_count + 1,
                 first_segment: state.first_segment ++ [record],
                 last_segment: [],
-                last_segment_id: state.last_segment_id + state.segment_size
+                last_segment_id: state.last_segment_id + 1
             }
           else
             %{
@@ -112,7 +112,7 @@ defmodule PQ do
               state
               | enqueue_count: state.enqueue_count + 1,
                 last_segment: [],
-                last_segment_id: state.last_segment_id + state.segment_size
+                last_segment_id: state.last_segment_id + 1
             }
           else
             %{
@@ -150,7 +150,7 @@ defmodule PQ do
               }
 
             _ ->
-              new_segment_id = state.first_segment_id + state.segment_size
+              new_segment_id = state.first_segment_id + 1
 
               %{
                 state
