@@ -88,6 +88,28 @@ defmodule PQTest do
     stop(pq)
   end
 
+  test "harmonica", %{line: line} = _context do
+    pq = start_unique(line)
+
+    [{40, 10}, {10, 30}, {20, 10}, {10, 30}, {20, 20}, {15, 5}, {15, 5}, {10, 15}, {10, 25}]
+    |> Enum.reduce({0, 0}, fn {to_enqueue, to_dequeue}, {total_enqueued, total_dequeued} ->
+      total_enqueued_next = total_enqueued + to_enqueue
+
+      total_enqueued..(total_enqueued_next - 1)
+      |> Enum.each(fn n -> assert(PQ.enqueue(pq, %{"n" => n})) end)
+
+      total_dequeued_next = total_dequeued + to_dequeue
+
+      total_dequeued..(total_dequeued_next - 1)
+      |> Enum.each(fn n -> assert(PQ.dequeue(pq) == %{"n" => n}) end)
+
+      {total_enqueued_next, total_dequeued_next}
+    end)
+
+    assert(Enum.empty?(queue_base_dir(pq) |> File.ls!()))
+    stop(pq)
+  end
+
   # support
 
   defp start_unique(id, clean \\ true) do
