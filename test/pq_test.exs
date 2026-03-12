@@ -6,7 +6,7 @@ defmodule PQTest do
     assert(PQ.head(pq) == nil)
     assert(PQ.count(pq) == 0)
     assert(PQ.empty?(pq))
-    PQ.stop(pq)
+    stop(pq)
   end
 
   test "simple enqueue/dequeue", %{line: line} = _context do
@@ -32,12 +32,21 @@ defmodule PQTest do
     stop(pq)
   end
 
-  test "multiple segments", %{line: line} = _context do
+  test "multiple segments 32/16", %{line: line} = _context do
     pq = start_unique(line)
     1..32 |> Enum.each(fn n -> PQ.enqueue(pq, %{"n" => n}) end)
     1..16 |> Enum.each(fn n -> assert(PQ.dequeue(pq) |> Map.get("n") == n) end)
     assert(PQ.head(pq) == %{"n" => 17})
     assert(PQ.count(pq) == 16)
+    stop(pq)
+  end
+
+  test "multiple segments 40", %{line: line} = _context do
+    pq = start_unique(line)
+    1..40 |> Enum.each(fn n -> PQ.enqueue(pq, %{"n" => n}) end)
+    assert(PQ.count(pq) == 40)
+    1..40 |> Enum.each(fn n -> assert(PQ.dequeue(pq) == %{"n" => n}) end)
+    assert(PQ.empty?(pq))
     stop(pq)
   end
 
@@ -54,6 +63,33 @@ defmodule PQTest do
     stop(pq)
   end
 
+  test "full", %{line: line} = _context do
+    pq = start_unique(line)
+    1..50 |> Enum.each(fn n -> assert(PQ.enqueue(pq, %{"n" => n})) end)
+    refute(PQ.empty?(pq))
+    assert(PQ.count(pq) == 50)
+    refute(PQ.enqueue(pq, %{"n" => 51}))
+    stop(pq)
+  end
+
+  test "gc", %{line: line} = _context do
+    pq = start_unique(line)
+
+    0..4
+    |> Enum.each(fn round ->
+      1..40 |> Enum.each(fn i -> assert(PQ.enqueue(pq, %{"n" => round * 40 + i})) end)
+      assert(PQ.count(pq) == 40)
+      1..40 |> Enum.each(fn i -> assert(PQ.dequeue(pq) == %{"n" => round * 40 + i}) end)
+      assert(PQ.empty?(pq))
+    end)
+
+    assert(Enum.empty?(queue_base_dir(pq) |> File.ls!()))
+
+    stop(pq)
+  end
+
+  # support
+
   defp start_unique(id, clean \\ true) do
     name = "test-pq-#{id}"
     clean && File.rm_rf!(name)
@@ -62,7 +98,11 @@ defmodule PQTest do
   end
 
   defp stop(pq, clean \\ true) do
-    clean && :sys.get_state(pq) |> PQ.queue_base_dir() |> File.rm_rf!()
+    clean && queue_base_dir(pq) |> File.rm_rf!()
     PQ.stop(pq)
+  end
+
+  defp queue_base_dir(pq) do
+    :sys.get_state(pq) |> PQ.queue_base_dir()
   end
 end

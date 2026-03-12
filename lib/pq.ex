@@ -83,47 +83,50 @@ defmodule PQ do
 
   @impl true
   def handle_call({:enqueue, msg}, {_sender, _call}, state) do
-    record = %{"id" => state.enqueue_count, "ts" => to_string(DateTime.utc_now()), "msg" => msg}
-    json = JSON.encode_to_iodata!(record)
-    log_enqueue(state, json)
+    if full?(state) do
+      {:reply, false, state}
+    else
+      record = %{"id" => state.enqueue_count, "ts" => to_string(DateTime.utc_now()), "msg" => msg}
+      json = JSON.encode_to_iodata!(record)
+      log_enqueue(state, json)
 
-    new_state =
-      case segments_count(state) do
-        1 ->
-          if state.enqueue_count + 1 == state.last_segment_id + state.segment_size do
-            %{
-              state
-              | enqueue_count: state.enqueue_count + 1,
-                first_segment: state.first_segment ++ [record],
-                last_segment: [],
-                last_segment_id: state.last_segment_id + 1
-            }
-          else
-            %{
-              state
-              | enqueue_count: state.enqueue_count + 1,
-                first_segment: state.first_segment ++ [record]
-            }
-          end
+      new_state =
+        case segments_count(state) do
+          1 ->
+            if state.enqueue_count + 1 == (state.first_segment_id + 1) * state.segment_size do
+              %{
+                state
+                | enqueue_count: state.enqueue_count + 1,
+                  first_segment: state.first_segment ++ [record],
+                  last_segment_id: state.last_segment_id + 1
+              }
+            else
+              %{
+                state
+                | enqueue_count: state.enqueue_count + 1,
+                  first_segment: state.first_segment ++ [record]
+              }
+            end
 
-        _ ->
-          if state.enqueue_count + 1 == state.last_segment_id + state.segment_size do
-            %{
-              state
-              | enqueue_count: state.enqueue_count + 1,
-                last_segment: [],
-                last_segment_id: state.last_segment_id + 1
-            }
-          else
-            %{
-              state
-              | enqueue_count: state.enqueue_count + 1,
-                last_segment: state.last_segment ++ [record]
-            }
-          end
-      end
+          _ ->
+            if state.enqueue_count + 1 == (state.last_segment_id + 1) * state.segment_size do
+              %{
+                state
+                | enqueue_count: state.enqueue_count + 1,
+                  last_segment: [],
+                  last_segment_id: state.last_segment_id + 1
+              }
+            else
+              %{
+                state
+                | enqueue_count: state.enqueue_count + 1,
+                  last_segment: state.last_segment ++ [record]
+              }
+            end
+        end
 
-    {:reply, true, new_state}
+      {:reply, true, new_state}
+    end
   end
 
   @impl true
@@ -145,9 +148,9 @@ defmodule PQ do
                 | first_segment: state.last_segment,
                   first_segment_id: state.last_segment_id,
                   last_segment: [],
-                  last_segment_id: 0,
                   dequeue_count: state.dequeue_count + 1
               }
+              |> gc_unused_segments()
 
             _ ->
               new_segment_id = state.first_segment_id + 1
@@ -158,9 +161,14 @@ defmodule PQ do
                   first_segment_id: new_segment_id,
                   dequeue_count: state.dequeue_count + 1
               }
+              |> gc_unused_segments()
           end
         else
-          %{state | first_segment: rest, dequeue_count: state.dequeue_count + 1}
+          %{
+            state
+            | first_segment: rest,
+              dequeue_count: state.dequeue_count + 1
+          }
         end
 
       {:reply, head["msg"], new_state}
@@ -214,11 +222,16 @@ defmodule PQ do
   def segments_count(
         %__MODULE__{
           first_segment_id: first_segment_id,
-          last_segment_id: last_segment_id,
-          segment_size: segment_size
+          last_segment_id: last_segment_id
         } = _state
       ) do
-    div(last_segment_id - first_segment_id, segment_size) + 1
+    last_segment_id - first_segment_id + 1
+  end
+
+  def full?(
+        %__MODULE__{segment_size: segment_size, number_of_segments: number_of_segments} = state
+      ) do
+    queued_count(state) >= segment_size * number_of_segments
   end
 
   def load_state(state) do
@@ -266,8 +279,8 @@ defmodule PQ do
           dequeue_count: dequeue_count,
           first_segment: last_enqueue_segment,
           last_segment: [],
-          first_segment_id: last_enqueue_segment_id,
-          last_segment_id: 0
+          first_segment_id: last_dequeue_segment_id,
+          last_segment_id: last_enqueue_segment_id
       }
     else
       last_dequeue_segment =
@@ -309,7 +322,14 @@ defmodule PQ do
     append_ndjson(json, path)
   end
 
-  def gc_unused_segments(state) do
+  def gc_unused_segments(%__MODULE__{first_segment_id: first_segment_id} = state) do
+    base_dir_path = queue_base_dir(state)
+
+    File.ls!(base_dir_path)
+    |> Enum.filter(fn file -> Path.extname(file) == ".ndjson" end)
+    |> Enum.filter(fn file -> segment_id_from_file(file) < first_segment_id end)
+    |> Enum.map(fn file -> File.rm!(Path.join(base_dir_path, file)) end)
+
     state
   end
 
