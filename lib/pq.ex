@@ -3,6 +3,30 @@ defmodule PQ do
 
   @moduledoc """
   A persistent queue
+
+  You add or enqueue items at the end of the queue.
+  You remove or dequeue items from the head of the queue.
+
+  This is a persistent queue: it stores its contents on files
+  in a directory base_dir/name so that it can recover after a
+  restart or failure, and can grow without using lots of memory.
+
+  Items should be maps than can be converted to JSON.
+
+  The implementation uses a up to number_of_segments each of segment_size.
+  There is a limit, number_of_segments * segment_size, of items in the queue.
+
+  Only one or two segments are kept in memory, the first_segment
+  where dequeue is happening and possible enqueue when there is only
+  one segment. If there is more than one segment, last_segment
+  is where enqueue is happening. In the case of more than two segments,
+  the intervening ones are not kept in memory and are loaded as needed.
+
+  For each segment there are two files: an enqueue and a dequeue file,
+  with a segment_id in their name. Both are appended to only, like a log.
+  These file have .ndjson as extension, newline delimited JSON.
+  When segments are both fully enqueued and dequeued, their files are
+  cleaned up to reclaim disk space.
   """
 
   # state structure
@@ -55,26 +79,100 @@ defmodule PQ do
 
   # client API
 
+  @doc """
+  Enqueue msg on queue pq, i.e. add it at the end.
+  Msg should be a map that can be JSON encoded.
+  Returns msg on success and nil when the queue is full.
+  """
   def enqueue(pq, msg) when is_map(msg) do
+    case enqueue_r(pq, msg) do
+      {:ok, record} -> record["msg"]
+      {:error, :full} -> nil
+    end
+  end
+
+  @doc """
+  Enqueue msg on queue pq, i.e. add it at the end.
+  Msg should be a map that can be JSON encoded.
+  Returns {:ok, %{"id" => id, "ts" => ts, "msg" => msg}} on success,
+  or {:error, :full} when the queue is full.
+  """
+  def enqueue_r(pq, msg) when is_map(msg) do
     GenServer.call(pq, {:enqueue, msg})
   end
 
-  def dequeue(pq, ack \\ true) do
-    GenServer.call(pq, {:dequeue, ack})
+  @doc """
+  Dequeue a msg from queue pq, i.e. remove it from the head.
+  Returns a msg map on success, nil when the queue is empty.
+  The boolean ack: option allows to make a difference between
+  successful message consumption or message rejection.
+  Optionally an id: can be specified for the expected internal id,
+  which can be obtained from enqueue_r or head_r.
+  If the id: does not match, nil is returned and no dequeue happens.
+  """
+  def dequeue(pq, opts \\ [ack: true]) do
+    case dequeue_r(pq, opts) do
+      {:ok, record} -> record["msg"]
+      {:error, :empty} -> nil
+      {:error, :mismatch} -> nil
+    end
   end
 
+  @doc """
+  Dequeue a msg from queue pq, i.e. remove it from the head.
+  Returns {:ok, %{"id" => id, "ts" => ts, "msg" => msg}} on success,
+  Returns {:error, :empty} when the queue is empty.
+  The boolean ack: option allows to make a difference between
+  successful message consumption or message rejection.
+  Optionally an id: can be specified for the expected internal id,
+  which can be obtained from enqueue_r or head_r.
+  If the id: does not match, {:error, :mismatch} is returned and no dequeue happens.
+  """
+  def dequeue_r(pq, opts \\ [ack: true]) do
+    GenServer.call(pq, {:dequeue, Keyword.merge([ack: true], opts)})
+  end
+
+  @doc """
+  Return the head of queue pq, the message that would be the result of dequeue,
+  without actually removing it.
+  Return nil if the queue is empty
+  """
   def head(pq) do
+    case head_r(pq) do
+      {:ok, record} -> record["msg"]
+      {:error, :empty} -> nil
+    end
+  end
+
+  @doc """
+  Return the head of queue pq, the message that would be the result of dequeue_r,
+  without actually removing it.
+  Returns {:ok, %{"id" => id, "ts" => ts, "msg" => msg}} on success.
+  id is the internal identification that can be used in dequeue_r
+  to make sure the same message is removed that was read with head_r.
+  Return {:error, :empty} if the queue is empty.
+  """
+  def head_r(pq) do
     GenServer.call(pq, :head)
   end
 
+  @doc """
+  Return whether queue pq is empty or not.
+  """
   def empty?(pq) do
-    GenServer.call(pq, :empty?)
+    count(pq) == 0
   end
 
+  @doc """
+  Return the number of items or messages in queue pq.
+  """
   def count(pq) do
     GenServer.call(pq, :count)
   end
 
+  @doc """
+  Reset queue pq to an empty state, both in memory and on disk
+  """
   def reset(pq) do
     GenServer.call(pq, :reset)
   end
@@ -84,7 +182,7 @@ defmodule PQ do
   @impl true
   def handle_call({:enqueue, msg}, {_sender, _call}, state) do
     if full?(state) do
-      {:reply, false, state}
+      {:reply, {:error, :full}, state}
     else
       record = %{"id" => state.enqueue_count, "ts" => to_string(DateTime.utc_now()), "msg" => msg}
       json = JSON.encode_to_iodata!(record)
@@ -93,14 +191,18 @@ defmodule PQ do
       new_state =
         case segments_count(state) do
           1 ->
+            # there is only 1 segment, i.e. first and last are the same, only first is used
             if state.enqueue_count + 1 == (state.first_segment_id + 1) * state.segment_size do
+              # first_segment will be full after this, make sure last_segment will be used next time
               %{
                 state
                 | enqueue_count: state.enqueue_count + 1,
                   first_segment: state.first_segment ++ [record],
+                  last_segment: [],
                   last_segment_id: state.last_segment_id + 1
               }
             else
+              # normal addition to first_segment
               %{
                 state
                 | enqueue_count: state.enqueue_count + 1,
@@ -110,6 +212,7 @@ defmodule PQ do
 
           _ ->
             if state.enqueue_count + 1 == (state.last_segment_id + 1) * state.segment_size do
+              # last_segment will be full after this, make sure a new last_segment is used next time
               %{
                 state
                 | enqueue_count: state.enqueue_count + 1,
@@ -117,6 +220,7 @@ defmodule PQ do
                   last_segment_id: state.last_segment_id + 1
               }
             else
+              # normal addition to last_segment
               %{
                 state
                 | enqueue_count: state.enqueue_count + 1,
@@ -125,65 +229,81 @@ defmodule PQ do
             end
         end
 
-      {:reply, true, new_state}
+      {:reply, {:ok, record}, new_state}
     end
   end
 
   @impl true
-  def handle_call({:dequeue, ack}, {_sender, _call}, state) do
-    if queued_count(state) == 0 do
-      {:reply, nil, state}
-    else
-      [head | rest] = state.first_segment
-      record = %{"id" => head["id"], "ts" => to_string(DateTime.utc_now()), "ack" => ack}
-      json = JSON.encode_to_iodata!(record)
-      log_dequeue(state, json)
+  def handle_call({:dequeue, opts}, {_sender, _call}, state) do
+    cond do
+      queue_empty?(state) ->
+        {:reply, {:error, :empty}, state}
 
-      new_state =
-        if rest == [] && segments_count(state) > 1 do
-          case segments_count(state) do
-            2 ->
-              %{
-                state
-                | first_segment: state.last_segment,
-                  first_segment_id: state.last_segment_id,
-                  last_segment: [],
-                  dequeue_count: state.dequeue_count + 1
-              }
-              |> gc_unused_segments()
+      Keyword.has_key?(opts, :id) && Keyword.get(opts, :id) != hd(state.first_segment)["id"] ->
+        {:reply, {:error, :mismatch}, state}
 
-            _ ->
-              new_segment_id = state.first_segment_id + 1
+      true ->
+        [head | rest] = state.first_segment
 
-              %{
-                state
-                | first_segment: load_segment(state, new_segment_id),
-                  first_segment_id: new_segment_id,
-                  dequeue_count: state.dequeue_count + 1
-              }
-              |> gc_unused_segments()
+        record = %{
+          "id" => head["id"],
+          "ts" => to_string(DateTime.utc_now()),
+          "ack" => Keyword.get(opts, :ack)
+        }
+
+        json = JSON.encode_to_iodata!(record)
+        log_dequeue(state, json)
+
+        new_state =
+          if rest == [] && segments_count(state) > 1 do
+            # more than 1 segment is in use and it will be empty next time
+            case segments_count(state) do
+              2 ->
+                # exactly 2 segments in use, shift the last one to the first,
+                # empty the last, and clean up files
+                %{
+                  state
+                  | first_segment: state.last_segment,
+                    first_segment_id: state.last_segment_id,
+                    last_segment: [],
+                    dequeue_count: state.dequeue_count + 1
+                }
+                |> gc_unused_segments()
+
+              _ ->
+                # more the 2 segments in use, load a new segment as first one
+                # and clean up files
+                new_segment_id = state.first_segment_id + 1
+
+                %{
+                  state
+                  | first_segment: load_segment(state, new_segment_id),
+                    first_segment_id: new_segment_id,
+                    dequeue_count: state.dequeue_count + 1
+                }
+                |> gc_unused_segments()
+            end
+          else
+            # only first segment is in used, normal removal
+            %{
+              state
+              | first_segment: rest,
+                dequeue_count: state.dequeue_count + 1
+            }
           end
-        else
-          %{
-            state
-            | first_segment: rest,
-              dequeue_count: state.dequeue_count + 1
-          }
-        end
 
-      {:reply, head["msg"], new_state}
+        {:reply, {:ok, head}, new_state}
     end
   end
 
   @impl true
   def handle_call(:head, {_sender, _call}, %__MODULE__{first_segment: first_segment} = state) do
-    head = List.first(first_segment)
-    {:reply, head["msg"], state}
-  end
-
-  @impl true
-  def handle_call(:empty?, {_sender, _call}, state) do
-    {:reply, queued_count(state) == 0, state}
+    if queue_empty?(state) do
+      {:reply, {:error, :empty}, state}
+    else
+      head = List.first(first_segment)
+      {:reply, {:ok, head}, state}
+    end
   end
 
   @impl true
@@ -228,6 +348,10 @@ defmodule PQ do
     last_segment_id - first_segment_id + 1
   end
 
+  def queue_empty?(state) do
+    queued_count(state) == 0
+  end
+
   def full?(
         %__MODULE__{segment_size: segment_size, number_of_segments: number_of_segments} = state
       ) do
@@ -240,6 +364,8 @@ defmodule PQ do
     files =
       File.ls!(base_dir_path) |> Enum.filter(fn name -> String.match?(name, ~r/^.*.ndjson$/) end)
 
+    # let's find the last (highest id) dequeue segment file
+
     last_dequeue_file =
       files
       |> Enum.filter(fn name -> String.match?(name, ~r/^dequeue-.*.ndjson$/) end)
@@ -248,10 +374,14 @@ defmodule PQ do
     last_dequeue_segment_id =
       if last_dequeue_file, do: segment_id_from_file(last_dequeue_file), else: 0
 
+    # get the last dequeued id, which equals the dequeue count
+
     dequeue_count =
       if last_dequeue_file,
         do: (read_last_ndjson(Path.join(base_dir_path, last_dequeue_file)) |> Map.get("id")) + 1,
         else: 0
+
+    # let's find the last (highest id) enqueue segment file
 
     last_enqueue_file =
       files
@@ -261,8 +391,12 @@ defmodule PQ do
     last_enqueue_segment_id =
       if last_enqueue_file, do: segment_id_from_file(last_enqueue_file), else: 0
 
+    # load the whole segment
+
     last_enqueue_segment =
       if last_enqueue_file, do: load_segment(state, last_enqueue_segment_id), else: []
+
+    # the enqueue count equals the last id
 
     enqueue_count =
       if Enum.empty?(last_enqueue_segment),
@@ -270,8 +404,12 @@ defmodule PQ do
         else: (List.last(last_enqueue_segment) |> Map.get("id")) + 1
 
     if last_dequeue_segment_id == last_enqueue_segment_id do
+      # we're in the situation where there is only 1 segment,
+      # stored in the first segment while the last segment is empty
+      # execute the necessary dequeue's with the last segment
       last_enqueue_segment =
-        last_enqueue_segment |> Enum.drop(rem(dequeue_count, state.segment_size))
+        last_enqueue_segment
+        |> Enum.drop(rem(dequeue_count, state.segment_size))
 
       %{
         state
@@ -283,6 +421,8 @@ defmodule PQ do
           last_segment_id: last_enqueue_segment_id
       }
     else
+      # we're in the at least 2 segments situation
+      # load the last segment and execute the necessary dequeue's
       last_dequeue_segment =
         load_segment(state, last_dequeue_segment_id)
         |> Enum.drop(rem(dequeue_count, state.segment_size))
@@ -325,6 +465,8 @@ defmodule PQ do
   def gc_unused_segments(%__MODULE__{first_segment_id: first_segment_id} = state) do
     base_dir_path = queue_base_dir(state)
 
+    # all segment files (enqueue & dequeue) with id less than
+    # the id of the current first segment are no longer needed
     File.ls!(base_dir_path)
     |> Enum.filter(fn file -> Path.extname(file) == ".ndjson" end)
     |> Enum.filter(fn file -> segment_id_from_file(file) < first_segment_id end)
