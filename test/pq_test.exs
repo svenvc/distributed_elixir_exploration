@@ -110,6 +110,19 @@ defmodule PQTest do
     stop(pq)
   end
 
+  test "dequeue with id", %{line: line} = _context do
+    pq = start_unique(line)
+    100..105 |> Enum.each(fn n -> {:ok, _record} = PQ.enqueue_r(pq, %{"code" => n}) end)
+    {:ok, _record} = PQ.dequeue_r(pq)
+    {:ok, %{"id" => id} = _record} = PQ.head_r(pq)
+    {:ok, _record} = PQ.dequeue_r(pq, id: id)
+    {:error, :mismatch} = PQ.dequeue_r(pq, id: id)
+    1..4 |> Enum.each(fn i -> {:ok, _record} = PQ.dequeue_r(pq, id: id + i) end)
+    {:error, :empty} = PQ.dequeue_r(pq)
+    {:error, :empty} = PQ.head_r(pq)
+    stop(pq)
+  end
+
   # support
 
   defp start_unique(id, clean \\ true) do
