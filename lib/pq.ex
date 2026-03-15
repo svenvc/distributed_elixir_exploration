@@ -2,7 +2,7 @@ defmodule PQ do
   use GenServer
 
   @moduledoc """
-  A persistent queue
+  A persistent FIFO queue
 
   You add or enqueue items at the end of the queue.
   You remove or dequeue items from the head of the queue.
@@ -24,9 +24,17 @@ defmodule PQ do
 
   For each segment there are two files: an enqueue and a dequeue file,
   with a segment_id in their name. Both are appended to only, like a log.
-  These file have .ndjson as extension, newline delimited JSON.
+  These files have .ndjson as extension, newline delimited JSON.
   When segments are both fully enqueued and dequeued, their files are
   cleaned up to reclaim disk space.
+
+  For each session, an enqueue and dequeue count are kept.
+  This count is also used as an internal id, along with a timestamp.
+
+  The client API has a number of functions with a _r suffix that
+  return this meta information. One way this can be useful is to do
+  a head_r, try to process an item, and then dequeue it on the condition
+  that the id is still the same.
   """
 
   # state structure
@@ -40,13 +48,20 @@ defmodule PQ do
             number_of_segments: @default_number_of_segments,
             enqueue_count: 0,
             dequeue_count: 0,
-            first_segment: [],
-            last_segment: [],
+            first_segment: :queue.new(),
+            last_segment: :queue.new(),
             first_segment_id: 0,
             last_segment_id: 0
 
   # initialization
 
+  @doc """
+  The following options are provided:
+  - name: the name of the queue (an atom), also used as name for the genserver and the sub directory
+  - base_dir: the base path under which queue sub directories will be created
+  - segment_size: the maximum number of items in a segment
+  - number_of_segments: the maximum number of segments
+  """
   @impl true
   def init(opts) do
     name = Keyword.get(opts, :name)
@@ -60,7 +75,7 @@ defmodule PQ do
       |> Map.update!(:base_dir, fn default -> base_dir || default end)
       |> Map.update!(:segment_size, fn default -> segment_size || default end)
       |> Map.update!(:number_of_segments, fn default -> number_of_segments || default end)
-      |> load_state()
+      |> load_state_from_disk()
 
     {:ok, initial_state}
   end
@@ -81,6 +96,7 @@ defmodule PQ do
 
   @doc """
   Enqueue msg on queue pq, i.e. add it at the end.
+  The queue is identified by a pid or a genserver name.
   Msg should be a map that can be JSON encoded.
   Returns msg on success and nil when the queue is full.
   """
@@ -93,6 +109,7 @@ defmodule PQ do
 
   @doc """
   Enqueue msg on queue pq, i.e. add it at the end.
+  The queue is identified by a pid or a genserver name.
   Msg should be a map that can be JSON encoded.
   Returns {:ok, %{"id" => id, "ts" => ts, "msg" => msg}} on success,
   or {:error, :full} when the queue is full.
@@ -103,6 +120,7 @@ defmodule PQ do
 
   @doc """
   Dequeue a msg from queue pq, i.e. remove it from the head.
+  The queue is identified by a pid or a genserver name.
   Returns a msg map on success, nil when the queue is empty.
   The boolean ack: option allows to make a difference between
   successful message consumption or message rejection.
@@ -120,6 +138,7 @@ defmodule PQ do
 
   @doc """
   Dequeue a msg from queue pq, i.e. remove it from the head.
+  The queue is identified by a pid or a genserver name.
   Returns {:ok, %{"id" => id, "ts" => ts, "msg" => msg}} on success,
   Returns {:error, :empty} when the queue is empty.
   The boolean ack: option allows to make a difference between
@@ -134,8 +153,8 @@ defmodule PQ do
 
   @doc """
   Return the head of queue pq, the message that would be the result of dequeue,
-  without actually removing it.
-  Return nil if the queue is empty
+  without actually removing it. Return nil if the queue is empty.
+  The queue is identified by a pid or a genserver name.
   """
   def head(pq) do
     case head_r(pq) do
@@ -147,6 +166,7 @@ defmodule PQ do
   @doc """
   Return the head of queue pq, the message that would be the result of dequeue_r,
   without actually removing it.
+  The queue is identified by a pid or a genserver name.
   Returns {:ok, %{"id" => id, "ts" => ts, "msg" => msg}} on success.
   id is the internal identification that can be used in dequeue_r
   to make sure the same message is removed that was read with head_r.
@@ -158,6 +178,7 @@ defmodule PQ do
 
   @doc """
   Return whether queue pq is empty or not.
+  The queue is identified by a pid or a genserver name.
   """
   def empty?(pq) do
     count(pq) == 0
@@ -165,13 +186,15 @@ defmodule PQ do
 
   @doc """
   Return the number of items or messages in queue pq.
+  The queue is identified by a pid or a genserver name.
   """
   def count(pq) do
     GenServer.call(pq, :count)
   end
 
   @doc """
-  Reset queue pq to an empty state, both in memory and on disk
+  Reset queue pq to an empty state, both in memory and on disk.
+  The queue is identified by a pid or a genserver name.
   """
   def reset(pq) do
     GenServer.call(pq, :reset)
@@ -197,8 +220,8 @@ defmodule PQ do
               %{
                 state
                 | enqueue_count: state.enqueue_count + 1,
-                  first_segment: state.first_segment ++ [record],
-                  last_segment: [],
+                  first_segment: :queue.in(record, state.first_segment),
+                  last_segment: :queue.new(),
                   last_segment_id: state.last_segment_id + 1
               }
             else
@@ -206,7 +229,7 @@ defmodule PQ do
               %{
                 state
                 | enqueue_count: state.enqueue_count + 1,
-                  first_segment: state.first_segment ++ [record]
+                  first_segment: :queue.in(record, state.first_segment)
               }
             end
 
@@ -216,7 +239,7 @@ defmodule PQ do
               %{
                 state
                 | enqueue_count: state.enqueue_count + 1,
-                  last_segment: [],
+                  last_segment: :queue.new(),
                   last_segment_id: state.last_segment_id + 1
               }
             else
@@ -224,7 +247,7 @@ defmodule PQ do
               %{
                 state
                 | enqueue_count: state.enqueue_count + 1,
-                  last_segment: state.last_segment ++ [record]
+                  last_segment: :queue.in(record, state.last_segment)
               }
             end
         end
@@ -239,11 +262,12 @@ defmodule PQ do
       queue_empty?(state) ->
         {:reply, {:error, :empty}, state}
 
-      Keyword.has_key?(opts, :id) && Keyword.get(opts, :id) != hd(state.first_segment)["id"] ->
+      Keyword.has_key?(opts, :id) &&
+          Keyword.get(opts, :id) != :queue.head(state.first_segment)["id"] ->
         {:reply, {:error, :mismatch}, state}
 
       true ->
-        [head | rest] = state.first_segment
+        {{:value, head}, rest} = :queue.out(state.first_segment)
 
         record = %{
           "id" => head["id"],
@@ -255,7 +279,7 @@ defmodule PQ do
         log_dequeue(state, json)
 
         new_state =
-          if rest == [] && segments_count(state) > 1 do
+          if :queue.is_empty(rest) && segments_count(state) > 1 do
             # more than 1 segment is in use and it will be empty next time
             case segments_count(state) do
               2 ->
@@ -265,7 +289,7 @@ defmodule PQ do
                   state
                   | first_segment: state.last_segment,
                     first_segment_id: state.last_segment_id,
-                    last_segment: [],
+                    last_segment: :queue.new(),
                     dequeue_count: state.dequeue_count + 1
                 }
                 |> gc_unused_segments()
@@ -277,7 +301,7 @@ defmodule PQ do
 
                 %{
                   state
-                  | first_segment: load_segment(state, new_segment_id),
+                  | first_segment: :queue.from_list(load_segment(state, new_segment_id)),
                     first_segment_id: new_segment_id,
                     dequeue_count: state.dequeue_count + 1
                 }
@@ -301,7 +325,7 @@ defmodule PQ do
     if queue_empty?(state) do
       {:reply, {:error, :empty}, state}
     else
-      head = List.first(first_segment)
+      head = :queue.head(first_segment)
       {:reply, {:ok, head}, state}
     end
   end
@@ -324,8 +348,8 @@ defmodule PQ do
        state
        | enqueue_count: 0,
          dequeue_count: 0,
-         first_segment: [],
-         last_segment: [],
+         first_segment: :queue.new(),
+         last_segment: :queue.new(),
          first_segment_id: 0,
          last_segment_id: 0
      }}
@@ -358,13 +382,15 @@ defmodule PQ do
     queued_count(state) >= segment_size * number_of_segments
   end
 
-  def load_state(state) do
+  def load_state_from_disk(state) do
     base_dir_path = queue_base_dir(state)
 
     files =
-      File.ls!(base_dir_path) |> Enum.filter(fn name -> String.match?(name, ~r/^.*.ndjson$/) end)
+      base_dir_path
+      |> File.ls!()
+      |> Enum.filter(fn name -> String.match?(name, ~r/^.*.ndjson$/) end)
 
-    # let's find the last (highest id) dequeue segment file
+    # find the last (highest id) dequeue segment file
 
     last_dequeue_file =
       files
@@ -381,7 +407,7 @@ defmodule PQ do
         do: (read_last_ndjson(Path.join(base_dir_path, last_dequeue_file)) |> Map.get("id")) + 1,
         else: 0
 
-    # let's find the last (highest id) enqueue segment file
+    # find the last (highest id) enqueue segment file
 
     last_enqueue_file =
       files
@@ -394,38 +420,44 @@ defmodule PQ do
     # load the whole segment
 
     last_enqueue_segment =
-      if last_enqueue_file, do: load_segment(state, last_enqueue_segment_id), else: []
+      if last_enqueue_file,
+        do: :queue.from_list(load_segment(state, last_enqueue_segment_id)),
+        else: :queue.new()
 
     # the enqueue count equals the last id
 
     enqueue_count =
-      if Enum.empty?(last_enqueue_segment),
+      if :queue.is_empty(last_enqueue_segment),
         do: 0,
-        else: (List.last(last_enqueue_segment) |> Map.get("id")) + 1
+        else: (:queue.last(last_enqueue_segment) |> Map.get("id")) + 1
 
     if last_dequeue_segment_id == last_enqueue_segment_id do
       # we're in the situation where there is only 1 segment,
-      # stored in the first segment while the last segment is empty
-      # execute the necessary dequeue's with the last segment
-      last_enqueue_segment =
-        last_enqueue_segment
-        |> Enum.drop(rem(dequeue_count, state.segment_size))
+      # stored in the first segment while the last segment is empty,
+      # execute the necessary dequeues
+      {_, last_enqueue_segment} =
+        :queue.split(
+          rem(dequeue_count, state.segment_size),
+          last_enqueue_segment
+        )
 
       %{
         state
         | enqueue_count: enqueue_count,
           dequeue_count: dequeue_count,
           first_segment: last_enqueue_segment,
-          last_segment: [],
+          last_segment: :queue.new(),
           first_segment_id: last_dequeue_segment_id,
           last_segment_id: last_enqueue_segment_id
       }
     else
       # we're in the at least 2 segments situation
-      # load the last segment and execute the necessary dequeue's
-      last_dequeue_segment =
-        load_segment(state, last_dequeue_segment_id)
-        |> Enum.drop(rem(dequeue_count, state.segment_size))
+      # load the last segment and execute the necessary dequeues
+      {_, last_dequeue_segment} =
+        :queue.split(
+          rem(dequeue_count, state.segment_size),
+          :queue.from_list(load_segment(state, last_dequeue_segment_id))
+        )
 
       %{
         state
