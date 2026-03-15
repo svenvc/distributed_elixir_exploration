@@ -207,10 +207,20 @@ defmodule PQ do
     if full?(state) do
       {:reply, {:error, :full}, state}
     else
-      record = %{"id" => state.enqueue_count, "ts" => to_string(DateTime.utc_now()), "msg" => msg}
+      # this is the record that we write to the enqueue file
+      record = %{
+        "id" => state.enqueue_count,
+        "ts" => to_string(DateTime.utc_now()),
+        "msg" => msg
+      }
+
+      # make sure JSON encoding succeeds
       json = JSON.encode_to_iodata!(record)
+
+      # now append to the enqueue log file
       log_enqueue(state, json)
 
+      # update the in memory state
       new_state =
         case segments_count(state) do
           1 ->
@@ -267,20 +277,28 @@ defmodule PQ do
         {:reply, {:error, :mismatch}, state}
 
       true ->
-        {{:value, head}, rest} = :queue.out(state.first_segment)
+        # get a hold of the head without making modifications
+        head = :queue.head(state.first_segment)
 
+        # this is the record that we write to the dequeue file
         record = %{
           "id" => head["id"],
           "ts" => to_string(DateTime.utc_now()),
           "ack" => Keyword.get(opts, :ack)
         }
 
+        # make sure JSON encoding succeeds
         json = JSON.encode_to_iodata!(record)
+
+        # now append to the dequeue log file
         log_dequeue(state, json)
+
+        # update the in memory state
+        {{:value, head}, rest} = :queue.out(state.first_segment)
 
         new_state =
           if :queue.is_empty(rest) && segments_count(state) > 1 do
-            # more than 1 segment is in use and it will be empty next time
+            # more than 1 segment is in use and it will be empty afterwards
             case segments_count(state) do
               2 ->
                 # exactly 2 segments in use, shift the last one to the first,
