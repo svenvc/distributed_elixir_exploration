@@ -517,10 +517,16 @@ defmodule PQ do
 
     # all segment files (enqueue & dequeue) with id less than
     # the id of the current first segment are no longer needed
+
     File.ls!(base_dir_path)
     |> Enum.filter(fn file -> Path.extname(file) == ".ndjson" end)
     |> Enum.filter(fn file -> segment_id_from_file(file) < first_segment_id end)
     |> Enum.map(fn file -> File.rm!(Path.join(base_dir_path, file)) end)
+
+    # note that if the current segment is full and then fully read out,
+    # all log files will be removed. if the queue would then be restarted,
+    # it will start its internal id counting from 0 again.
+    # as this is an internal id, this should make no functional difference
 
     state
   end
