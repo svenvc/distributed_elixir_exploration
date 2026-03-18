@@ -25,8 +25,8 @@ defmodule PQTest do
     PQ.dequeue(pq)
     assert(PQ.count(pq) == 2)
     assert(PQ.head(pq) == %{"n" => 2})
-    stop(pq, false)
-    pq = start_unique(line, false)
+    stop(pq, clean: false)
+    pq = start_unique(line, clean: false)
     assert(PQ.count(pq) == 2)
     assert(PQ.head(pq) == %{"n" => 2})
     stop(pq)
@@ -56,8 +56,8 @@ defmodule PQTest do
     1..16 |> Enum.each(fn n -> assert(PQ.dequeue(pq) |> Map.get("n") == n) end)
     assert(PQ.head(pq) == %{"n" => 17})
     assert(PQ.count(pq) == 16)
-    stop(pq, false)
-    pq = start_unique(line, false)
+    stop(pq, clean: false)
+    pq = start_unique(line, clean: false)
     assert(PQ.head(pq) == %{"n" => 17})
     assert(PQ.count(pq) == 16)
     stop(pq)
@@ -123,17 +123,48 @@ defmodule PQTest do
     stop(pq)
   end
 
+  test "delegate receives dequeued", %{line: line} = _context do
+    pq = start_unique(line, delegate: self())
+    PQ.enqueue(pq, %{"test" => 123})
+    assert_receive :enqueued
+    stop(pq)
+  end
+
+  test "simple worker", %{line: line} = _context do
+    queue_name = String.to_atom(unique_name_for_test(line))
+    worker_name = :"test-worker-#{line}"
+    test_process = self()
+
+    {:ok, worker} =
+      PQWorker.start(
+        queue_name: queue_name,
+        name: worker_name,
+        handler_function: fn msg ->
+          send(test_process, msg)
+          :ack
+        end
+      )
+
+    pq = start_unique(line, delegate: worker)
+    PQ.enqueue(pq, %{"test" => 123})
+    assert_receive %{"test" => 123}
+    stop(pq)
+    PQWorker.stop(worker)
+  end
+
   # support
 
-  defp start_unique(id, clean \\ true) do
-    name = "test-pq-#{id}"
-    clean && File.rm_rf!(name)
-    {:ok, pq} = PQ.start(name: String.to_atom(name))
+  defp unique_name_for_test(id), do: "test-pq-#{id}"
+
+  defp start_unique(id, opts \\ [clean: true]) do
+    name = unique_name_for_test(id)
+    Keyword.get(opts, :clean, true) && File.rm_rf!(name)
+    {:ok, pq} = PQ.start([name: String.to_atom(name)] ++ opts)
     pq
   end
 
-  defp stop(pq, clean \\ true) do
-    clean && queue_base_dir(pq) |> File.rm_rf!()
+  defp stop(pq, opts \\ [clean: true]) do
+    Keyword.get(opts, :clean, true) && queue_base_dir(pq) |> File.rm_rf!()
     PQ.stop(pq)
   end
 

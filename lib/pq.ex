@@ -35,6 +35,10 @@ defmodule PQ do
   return this meta information. One way this can be useful is to do
   a head_r, try to process an item, and then dequeue it on the condition
   that the id is still the same.
+
+  Optionally, a delegate can be specified, a process that will be sent
+  the :enqueued message after each :enqueue operation. The delegate can
+  be a pid or an atom name of a registered process which is looked up each time.
   """
 
   # state structure
@@ -51,7 +55,8 @@ defmodule PQ do
             first_segment: :queue.new(),
             last_segment: :queue.new(),
             first_segment_id: 0,
-            last_segment_id: 0
+            last_segment_id: 0,
+            delegate: nil
 
   # initialization
 
@@ -61,6 +66,7 @@ defmodule PQ do
   - base_dir: the base path under which queue sub directories will be created
   - segment_size: the maximum number of items in a segment
   - number_of_segments: the maximum number of segments
+  - delegate: the process to send :enqueued when items are added
   """
   @impl true
   def init(opts) do
@@ -68,6 +74,7 @@ defmodule PQ do
     base_dir = Keyword.get(opts, :base_dir)
     segment_size = Keyword.get(opts, :segment_size)
     number_of_segments = Keyword.get(opts, :number_of_segments)
+    delegate = Keyword.get(opts, :delegate)
 
     initial_state =
       %__MODULE__{}
@@ -75,6 +82,7 @@ defmodule PQ do
       |> Map.update!(:base_dir, fn default -> base_dir || default end)
       |> Map.update!(:segment_size, fn default -> segment_size || default end)
       |> Map.update!(:number_of_segments, fn default -> number_of_segments || default end)
+      |> Map.update!(:delegate, fn default -> delegate || default end)
       |> load_state_from_disk()
 
     {:ok, initial_state}
@@ -245,7 +253,8 @@ defmodule PQ do
 
           _ ->
             if state.enqueue_count + 1 == (state.last_segment_id + 1) * state.segment_size do
-              # last_segment will be full after this, make sure a new last_segment is used next time
+              # last_segment will be full after this, arrange for a new last_segment to be used next time
+              # there is no need to actually add to the in-memory segment as we start a new one anyway
               %{
                 state
                 | enqueue_count: state.enqueue_count + 1,
@@ -262,7 +271,7 @@ defmodule PQ do
             end
         end
 
-      {:reply, {:ok, record}, new_state}
+      {:reply, {:ok, record}, notify_delegate(new_state)}
     end
   end
 
@@ -527,6 +536,16 @@ defmodule PQ do
     # all log files will be removed. if the queue would then be restarted,
     # it will start its internal id counting from 0 again.
     # as this is an internal id, this should make no functional difference
+
+    state
+  end
+
+  def notify_delegate(state) do
+    delegate = state.delegate
+
+    if delegate do
+      send(delegate, :enqueued)
+    end
 
     state
   end
