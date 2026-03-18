@@ -132,7 +132,7 @@ defmodule PQTest do
 
   test "simple worker", %{line: line} = _context do
     queue_name = String.to_atom(unique_name_for_test(line))
-    worker_name = :"test-worker-#{line}"
+    worker_name = String.to_atom("test-worker-#{line}")
     test_process = self()
 
     {:ok, worker} =
@@ -148,6 +148,25 @@ defmodule PQTest do
     pq = start_unique(line, delegate: worker)
     PQ.enqueue(pq, %{"test" => 123})
     assert_receive %{"test" => 123}
+    stop(pq)
+    PQWorker.stop(worker)
+  end
+
+  test "drain queue by worker", %{line: line} = _context do
+    queue_name = String.to_atom(unique_name_for_test(line))
+    worker_name = String.to_atom("test-worker-#{line}")
+
+    {:ok, worker} =
+      PQWorker.start(
+        queue_name: queue_name,
+        name: worker_name,
+        handler_function: fn _msg -> :ack end
+      )
+
+    pq = start_unique(line, delegate: worker)
+    1..1000 |> Enum.each(fn i -> PQ.enqueue(pq, %{"i" => i}) end)
+    Process.sleep(10)
+    assert(PQ.empty?(pq))
     stop(pq)
     PQWorker.stop(worker)
   end
