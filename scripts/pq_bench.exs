@@ -1,13 +1,24 @@
+count = System.get_env("COUNT", "1000") |> String.to_integer()
+
+IO.puts("\nPersistent Queue Benchmark\nSending and consuming #{count} messages")
+
 queue_name = :pq
 worker_name = :pqw
 
 File.rm_rf!("pq")
 
+parent = self()
+
 {:ok, worker} =
   PQWorker.start(
     queue_name: queue_name,
     name: worker_name,
-    handler_function: fn _msg -> :ack end
+    handler_function: fn msg ->
+      if msg["index"] == count - 1 do
+        send(parent, {:done, msg})
+      end
+      :ack
+    end
   )
 
 {:ok, queue} =
@@ -16,16 +27,12 @@ File.rm_rf!("pq")
     delegate: worker
   )
 
-count = System.get_env("COUNT", "1000") |> String.to_integer()
-
-IO.puts("\nPersistent Queue Benchmark\nSending and consuming #{count} messages")
-
 defmodule Util do
   def enqueue(q, m, t \\ 100) do
     if !PQ.enqueue(q, m) do
       if t >= 0 do
-        Process.sleep(10)
-        enqueue(q, m, t - 10)
+        Process.sleep(1)
+        enqueue(q, m, t - 1)
       else
         raise "timed_out"
       end
@@ -39,15 +46,18 @@ end
     |> Enum.each(fn i ->
       Util.enqueue(
         queue,
-        %{"index" => i, "extra" => "this is a benchmark", "test" => true}
+        %{"index" => i, "info" => "this is a benchmark", "test" => true, "xy" => [1.5, -2.5]}
       )
     end)
   end)
 
 IO.puts("#{count} messages took #{us / 1_000_000} s")
-IO.puts("#{Float.round(us / count, 2)} μs/msg #{Float.round(count / us * 1_000_000, 2)} msg/s")
+IO.puts("#{Float.round(us / count, 2)} μs/msg")
+IO.puts("#{Float.round(count / us * 1_000_000, 2)} msg/s")
 
-Process.sleep(100)
+receive do
+  {:done, last_msg} -> IO.inspect(last_msg, label: "Done, last msg")
+end
 
 IO.inspect(PQ.empty?(queue), label: "Queue empty ?")
 
