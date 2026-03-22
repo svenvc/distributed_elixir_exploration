@@ -23,7 +23,8 @@ defmodule Gsweb.MixProject do
   defp deps do
     [
       {:cowboy, "~> 2.14"},
-      {:req, "~> 0.5.0"}
+      {:req, "~> 0.5.0"},
+      {:spqueue, "~> 0.1.0"}
     ]
   end
 end
